@@ -1,26 +1,78 @@
 export async function onRequest(context) {
-  // 1. Basic visitor info
-  const ip = context.request.headers.get("CF-Connecting-IP") || "Unknown IP";
-  const date = new Date().toISOString();
-  const url = context.request.url;
+  const req = context.request;
+  const cf = req.cf || {};
 
-  // 2. Extra Device & Location Info from Cloudflare
-  const country = context.request.cf?.country || "Unknown Country";
-  const city = context.request.cf?.city || "Unknown City";
+  // --- 1. NETWORK & TIME ---
+  const ip = req.headers.get("CF-Connecting-IP") || "Unknown";
+  const timestamp = new Date().toISOString();
+  const protocol = cf.httpProtocol || "Unknown";
+
+  // --- 2. EXACT LOCATION ---
+  const country = cf.country || "Unknown";
+  const city = cf.city || "Unknown";
+  const region = cf.region || "Unknown";       // State / Province
+  const postalCode = cf.postalCode || "Unknown"; 
+  const timezone = cf.timezone || "Unknown";
+
+  // --- 3. THE ISP (PROVIDER) ---
+  const isp = cf.asOrganization || "Unknown"; // e.g., Jio, Airtel, Comcast
+
+  // --- 4. DEVICE & PREFERENCES ---
+  const deviceText = req.headers.get("User-Agent") || "Unknown";
+  const language = req.headers.get("Accept-Language") || "Unknown"; // e.g., en-US
+
+  // --- NEW: HIGH-PRIVACY DEVICE MODEL TRACKER ---
+  const rawModel = req.headers.get("Sec-CH-UA-Model") || "";
+  let deviceModel = "Hidden (First visit or blocked by browser privacy settings)";
   
-  // This gets the raw text stating the device name, browser, and OS (User-Agent)
-  const userAgent = context.request.headers.get("User-Agent") || "Unknown Device";
+  if (rawModel) {
+    // Strip away any messy quotation marks from the browser header
+    const cleanModel = rawModel.replace(/"/g, "").trim();
+    
+    // Quick-check filter for common factory prefixes (like Samsung's "SM-")
+    if (cleanModel.startsWith("SM-")) {
+      deviceModel = `${cleanModel} (Samsung)`;
+    } else {
+      deviceModel = cleanModel;
+    }
+  }
 
-  // 3. Format the log entry text beautifully
-  const logValue = `IP: ${ip} | Location: ${city}, ${country} | Device/Browser: ${userAgent} | URL: ${url}`;
+  // --- 5. THE WEB TRAFFIC ---
+  const currentUrl = req.url;
+  const referralPage = req.headers.get("Referer") || "Direct Visit (No Referrer)";
+  const cloudflareDataCenter = cf.colo || "Unknown"; // 3-letter code of the server you hit
 
-  // 4. Save everything to your free Cloudflare KV storage
+  // Structure everything neatly into your log block
+  const structuralLog = `
+📅 [TIME]: ${timestamp}
+🌐 [IP ADDRESS]: ${ip}
+🏢 [ISP / CARRIER]: ${isp}
+📡 [PROTOCOL]: ${protocol}
+
+📍 [LOCATION]: ${city}, ${region}, ${country} (ZIP: ${postalCode})
+⏰ [TIMEZONE]: ${timezone}
+🏢 [CLOUDFLARE DATA CENTER]: ${cloudflareDataCenter}
+
+🖥️ [DEVICE/BROWSER]: ${deviceText}
+📱 [EXACT MODEL]: ${deviceModel}
+🗣️ [LANGUAGES]: ${language}
+
+🔗 [PAGE VISITED]: ${currentUrl}
+⬅️ [CAME FROM (REFERRER)]: ${referralPage}
+--------------------------------------------------`;
+
+  // Save this structured string to your KV database
   if (context.env.IP_LOGS) {
     context.waitUntil(
-      context.env.IP_LOGS.put(date, logValue).catch(err => console.error("Failed to save log:", err))
+      context.env.IP_LOGS.put(timestamp, structuralLog.trim()).catch(err => console.error(err))
     );
   }
 
-  // 5. Serve the website instantly
-  return await context.next();
+  // --- 6. THE HANDSHAKE ---
+  // We must intercept the website's response to inject an "Accept-CH" permission header.
+  // This tells compatible browsers to drop their guard and send the hardware model on subsequent page clicks.
+  const response = await context.next();
+  response.headers.set("Accept-CH", "Sec-CH-UA-Model");
+
+  return response;
 }
