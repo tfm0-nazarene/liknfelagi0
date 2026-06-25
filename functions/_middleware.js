@@ -1,6 +1,21 @@
 export async function onRequest(context) {
   const req = context.request;
   const cf = req.cf || {};
+  // --- SECRET ADMIN WIPE COMMAND ---
+  const urlObj = new URL(req.url);
+  if (urlObj.searchParams.get("nuke") === "yesplease") {
+    if (context.env.IP_LOGS) {
+      // 1. Ask the database to list the existing keys
+      const listed = await context.env.IP_LOGS.list();
+      
+      // 2. Loop through every key found and delete it
+      for (const key of listed.keys) {
+        await context.env.IP_LOGS.delete(key.name);
+      }
+      
+      return new Response("💥 All logs successfully deleted!", { status: 200 });
+    }
+  }
 
   // --- 1. NETWORK & TIME ---
   const ip = req.headers.get("CF-Connecting-IP") || "Unknown";
